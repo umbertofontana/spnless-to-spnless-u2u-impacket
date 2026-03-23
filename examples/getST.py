@@ -92,6 +92,7 @@ class GETST:
         self.__kdcHost = options.dc_ip
         self.__force_forwardable = options.force_forwardable
         self.__additional_ticket = options.additional_ticket
+        self.__additional_tgt = options.additional_tgt
         self.__dmsa = options.dmsa
         self.__saveFileName = None
         self.__no_s4u2proxy = options.no_s4u2proxy
@@ -839,7 +840,7 @@ class GETST:
 if __name__ == '__main__':
     print(version.BANNER)
 
-    parser = argparse.ArgumentParser(add_help=True, description="Given a password, hash or aesKey, it will request a "
+    parser = argparse.ArgumentParser(add_help=True, description="Ciao! Given a password, hash or aesKey, it will request a "
                                                                 "Service Ticket and save it as ccache")
     parser.add_argument('identity', action='store', help='[domain/]username[:password]')
     parser.add_argument('-spn', action="store", help='SPN (service/server) of the target service the '
@@ -860,6 +861,7 @@ if __name__ == '__main__':
                                                                         'specified -identity should be provided. This allows impresonation of protected users '
                                                                         'and bypass of "Kerberos-only" constrained delegation restrictions. See CVE-2020-17049')
     parser.add_argument('-renew', action='store_true', help='Sets the RENEW ticket option to renew the TGT used for authentication. Set -spn to \'krbtgt/DOMAINFQDN\'')
+    parser.add_argument('-additional-tgt', action='store', metavar='ticket.ccache', help='include the target user TGT for U2U S4U2Proxy to SPN-less service')
 
     group = parser.add_argument_group('authentication')
 
