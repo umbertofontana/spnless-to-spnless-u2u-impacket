@@ -1,139 +1,23 @@
-<img width="2043" height="571" alt="Impacket_light" src="https://github.com/user-attachments/assets/14aed700-0c6e-4865-ac53-686b91874f50" />
+Impacket fork to introduce SPNless-to-SPNless U2U S4U2Proxy in getST.py.
 
-Impacket
-========
+Result: even though RFC 4120 theoretically supports this:
 
-[![Latest Version](https://img.shields.io/pypi/v/impacket.svg)](https://pypi.python.org/pypi/impacket/)
-[![Build and test Impacket](https://github.com/fortra/impacket/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/fortra/impacket/actions/workflows/build_and_test.yml)
+https://www.rfc-editor.org/rfc/rfc4120#section-5.4.1, p. 80:
+  
+_additional-tickets_
+     _Additional tickets MAY be optionally included in a request to the
+      ticket-granting server.  If the ENC-TKT-IN-SKEY option has been
+      specified, then the session key from the additional ticket will be
+      used in place of the server's key to encrypt the new ticket.  When
+      the ENC-TKT-IN-SKEY option is used for user-to-user
+      authentication, this additional ticket MAY be a TGT issued by the
+      local realm or an inter-realm TGT issued for the current KDC's
+      realm by a remote KDC.  **If more than one option that requires
+      additional tickets has been specified, then the additional tickets
+      are used in the order specified by the ordering of the options
+      bits (see kdc-options, above).**_
 
-Copyright Fortra, LLC and its affiliated companies. All rights reserved.
+The current Windows implementation of Kerberos doesn't support two additional tickets being sent to the KDC withing the same TGS-REQ (the ST derived from S4U2Self that must be used as authentication proof to invoke S4U2Proxy and the target user's TGT in order to use U2U).
 
-Impacket was originally created by [SecureAuth](https://www.secureauth.com/labs/open-source-tools/impacket), and now maintained by Fortra's Core Security.
-
-Impacket is a collection of Python classes for working with network
-protocols. Impacket is focused on providing low-level
-programmatic access to the packets and for some protocols (e.g.
-SMB1-3 and MSRPC) the protocol implementation itself.
-Packets can be constructed from scratch, as well as parsed from 
-raw data, and the object-oriented API makes it simple to work with 
-deep hierarchies of protocols. The library provides a set of tools
-as examples of what can be done within the context of this library.
-
-What protocols are featured?
-----------------------------
-
- * Ethernet, Linux "Cooked" capture.
- * IP, TCP, UDP, ICMP, IGMP, ARP.
- * IPv4 and IPv6 Support.
- * NMB and SMB1, SMB2 and SMB3 (high-level implementations).
- * MSRPC version 5, over different transports: TCP, SMB/TCP, SMB/NetBIOS and HTTP.
- * Plain, NTLM and Kerberos authentications, using password/hashes/tickets/keys.
- * Portions/full implementation of the following MSRPC interfaces: EPM, DTYPES, LSAD, LSAT, NRPC, RRP, SAMR, SRVS, WKST, SCMR, BKRP, DHCPM, EVEN6, MGMT, SASEC, TSCH, DCOM, WMI, OXABREF, NSPI, OXNSPI.
- * Portions of TDS (MSSQL) and LDAP protocol implementations.
- 
-Maintainer
-==========
-
-[Core Security](https://www.coresecurity.com/)
-
-
-Table of Contents
-=================
-
-* [Getting Impacket](#getting-impacket)
-* [Setup](#setup)
-* [Testing](#testing)
-* [Licensing](#licensing)
-* [Disclaimer](#disclaimer)
-* [Contact Us](#contact-us)
-
-Getting Impacket
-================
-
-### Latest version
-
-* Impacket v0.13.0
-
-  [![Python versions](https://img.shields.io/pypi/pyversions/impacket.svg)](https://pypi.python.org/pypi/impacket/)
-
-[Current and past releases](https://github.com/fortra/impacket/releases)
-
-### Development version
-
-* Impacket v0.14.0-dev (**[master branch](https://github.com/fortra/impacket/tree/master)**)
-
-  [![Python versions](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11%20|%203.12%20|%203.13-blue.svg)](https://github.com/fortra/impacket/tree/master)
-
-
-Setup
-=====
-
-### Quick start
-
-> :information_source: We recommend using `pipx` over `pip` for system-wide installations.
-
-In order to grab the latest stable release run:
-
-    python3 -m pipx install impacket
-
-If you want to play with the unreleased changes, download the development 
-version from the [master branch](https://github.com/fortra/impacket/tree/master),
-extract the package, and execute the following command from the
-directory where Impacket has been unpacked:
-
-    python3 -m pipx install .
-
-### Docker Support
-
-Build Impacket's image:
-
-      $ docker build -t "impacket:latest" .
-
-Using Impacket's image:
-
-      $ docker run -it --rm "impacket:latest"
-
-Testing
-=======
-
-The library leverages the [pytest](https://docs.pytest.org/) framework for organizing
-and marking test cases, [tox](https://tox.readthedocs.io/) to automate the process of
-running them across supported Python versions, and [coverage](https://coverage.readthedocs.io/)
-to obtain coverage statistics.
-
-A [comprehensive testing guide](TESTING.md) is available.
-
-
-Licensing
-=========
-
-This software is provided under a slightly modified version of
-the Apache Software License. See the accompanying [LICENSE](LICENSE) file for
-more information.
-
-SMBv1 and NetBIOS support based on Pysmb by Michael Teo.
-
-Disclaimer
-==========
-
-The spirit of this Open Source initiative is to help security researchers,
-and the community, speed up research and educational activities related to
-the implementation of networking protocols and stacks.
-
-The information in this repository is for research and educational purposes
-and not meant to be used in production environments and/or as part
-of commercial products.
-
-If you desire to use this code or some part of it for your own uses, we
-recommend applying proper security development life cycle and secure coding
-practices, as well as generate and track the respective indicators of
-compromise according to your needs.
-
-
-Contact Us
-==========
-
-Whether you want to report a bug, send a patch, or give some suggestions
-on this package, reach out to us at https://www.coresecurity.com/about/contact.
-
-For security-related questions check our [security policy](SECURITY.md).
+The getST.py file is modified according to RFC and technically correct - in case some day Microsoft decides to implement this. 
+Keep in mind that the hypothetical final AP-REQ to the user must also be modified in accordance to the RFC - can't be asked at the moment, but might do it in the future just for funzies.
