@@ -50,8 +50,8 @@
 #   Jake Karnes (@jakekarnes42)
 
 # TODO: 
-# Remove the need for sname when asking for SPNless U2U
-# Additional tickets ordering should be correct: cname-in-addl-tkt is bit 14, enc-tkt-in-skey is bit 28.
+# Remove the need for sname when asking for SPNless U2U -> Done (kinda)
+# Additional tickets ordering should be correct: cname-in-addl-tkt is bit 14, enc-tkt-in-skey is bit 28 -> Yes it is
 
 
 from __future__ import division
@@ -1114,7 +1114,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
     options = parser.parse_args()
-
+    
+    # This is where I remove the sname requirement... Not okay I know
     #if not options.no_s4u2proxy and options.spn is None:
     #    parser.error("argument -spn is required, except when -self is set")
 
