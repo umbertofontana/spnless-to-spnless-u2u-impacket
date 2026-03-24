@@ -49,6 +49,11 @@
 #   Leandro (@0xdeaddood)
 #   Jake Karnes (@jakekarnes42)
 
+# TODO: 
+# Remove the need for sname when asking for SPNless U2U
+# Additional tickets ordering should be correct: cname-in-addl-tkt is bit 14, enc-tkt-in-skey is bit 28.
+
+
 from __future__ import division
 from __future__ import print_function
 import argparse
@@ -967,12 +972,11 @@ class GETST:
             opts.append(constants.KDCOptions.forwardable.value)
             opts.append(constants.KDCOptions.renewable.value)
             # Questo specifica che stiamo facendo U2U
-            # Questo implica una variazione nel checksum dell'Authenticator (KRB_AP_ERR_MODIFIED) che dobbiamo risolvere
             opts.append(constants.KDCOptions.enc_tkt_in_skey.value)
 
             reqBody['kdc-options'] = constants.encodeFlags(opts)
-            service2 = Principal(self.__options.spn, type=constants.PrincipalNameType.NT_SRV_INST.value)
-            seq_set(reqBody, 'sname', service2.components_to_asn1)
+            #service2 = Principal(self.__options.spn, type=constants.PrincipalNameType.NT_SRV_INST.value)
+            #seq_set(reqBody, 'sname', service2.components_to_asn1)
             reqBody['realm'] = self.__domain
 
             # Qua vogliamo inserire, oltre al ST, il TGT del target
@@ -1111,8 +1115,8 @@ if __name__ == '__main__':
 
     options = parser.parse_args()
 
-    if not options.no_s4u2proxy and options.spn is None:
-        parser.error("argument -spn is required, except when -self is set")
+    #if not options.no_s4u2proxy and options.spn is None:
+    #    parser.error("argument -spn is required, except when -self is set")
 
     if options.no_s4u2proxy and options.impersonate is None:
         parser.error("argument -impersonate is required when doing S4U2self")
